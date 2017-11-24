@@ -11,7 +11,6 @@
   tdb-set!
   tdb-delete!
   with-tdb-transaction
-  tdb-cancel-transaction!
   tdb-calculate-hash
   tdb-name
   tdb-last-error
@@ -157,4 +156,20 @@
 (define (tdb-delete! ctx key)
   (ok-0 (tdb_delete (tdb-context-raw ctx)
                     (bytevector->TDB_DATA key))))
+
+(define (with-tdb-transaction ctx func)
+  (define (assert! v) (tdb-assert! ctx (ok-0 v)))
+  (assert! (tdb_transaction_start (tdb-context-raw ctx)))
+  (call/cc
+    (lambda (done)
+      (call/cc
+        (lambda (cancel)
+          (let ([r (func cancel)])
+            (assert! (tdb_transaction_prepare_commit (tdb-context-raw ctx)))
+            (assert! (tdb_transaction_commit (tdb-context-raw ctx)))
+            (done r))))
+      (assert! (tdb_transaction_cancel (tdb-context-raw ctx))))))
+
+
+
 
