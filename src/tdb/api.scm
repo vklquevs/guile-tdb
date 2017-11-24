@@ -21,7 +21,10 @@
   TDB_DISALLOW_NESTING
   TDB_INCOMPATIBLE_HASH
 
+  TDB_DATA
+
   tdb_open
+  tdb_open_ex
   tdb_set_max_dead
   tdb_reopen
   tdb_reopen_all
@@ -43,9 +46,10 @@
   tdb_unlockall_read
   tdb_lockall_mark
   tdb_lockall_unmark
-  char *tdb_name
+  tdb_name
   tdb_fd
-  *tdb_get_logging_private
+  tdb_get_logging_private
+  tdb_set_logging_function
   tdb_transaction_start
   tdb_transaction_start_nonblock
   tdb_transaction_prepare_commit
@@ -84,10 +88,12 @@
 (define TDB_DISALLOW_NESTING 1024)
 (define TDB_INCOMPATIBLE_HASH 2048)
 
-(define *lib* (dynamic-link "libtdb"))
-
+; (define *lib* (dynamic-link "libtdb"))
+(define *lib* (dynamic-link "/nix/store/25z6z3jbf40b8rdm5n8hnzmhinbksh60-tdb-1.3.11/lib/libtdb.so"))
 (define (tdb-foreign ret name . args)
   (pointer->procedure ret (dynamic-func name *lib*) args))
+(define (tdb-foreign/errno ret name . args)
+  (pointer->procedure ret (dynamic-func name *lib*) args #:return-errno? #t))
 
 (define TDB_ERROR int)
 (define TDB_DATA (list '* int))
@@ -95,10 +101,15 @@
 (define tdb_context* '*)
 (define char* '*)
 (define flags int)
+(define tdb_log_function '*)
 
 (define tdb_open
-  (tdb-foreign tdb_context* "tdb_open"
-               char* int flags int int))
+  (tdb-foreign/errno tdb_context* "tdb_open"
+                     char* int flags int int))
+
+(define tdb_open_ex
+  (tdb-foreign/errno tdb_context* "tdb_open_ex"
+                     char* int flags int int tdb_log_function '*))
 
 (define tdb_set_max_dead
   (tdb-foreign void "tdb_set_max_dead"
@@ -112,6 +123,9 @@
   (tdb-foreign int "tdb_reopen_all"
                int))
 
+(define tdb_set_logging_function
+  (tdb-foreign void "tdb_set_logging_function"
+               tdb_context* tdb_log_function))
 ; void tdb_set_logging_function(struct tdb_context *tdb, const struct tdb_logging_context *log_ctx);
 
 (define tdb_error
@@ -144,8 +158,8 @@
                tdb_context* TDB_DATA TDB_DATA))
 
 (define tdb_close
-  (tdb-foreign int "tdb_close"
-               tdb_context*))
+  (tdb-foreign/errno int "tdb_close"
+                     tdb_context*))
 
 (define tdb_firstkey
   (tdb-foreign TDB_DATA "tdb_firstkey"
@@ -195,8 +209,8 @@
   (tdb-foreign int "tdb_lockall_unmark"
                tdb_context*))
 
-(define char *tdb_name
-  (tdb-foreign const "char *tdb_name"
+(define tdb_name
+  (tdb-foreign char* "tdb_name"
                tdb_context*))
 
 (define tdb_fd
@@ -205,8 +219,8 @@
 
 ; tdb_log_func tdb_log_fn(struct tdb_context *tdb);
 
-(define *tdb_get_logging_private
-  (tdb-foreign void "*tdb_get_logging_private"
+(define tdb_get_logging_private
+  (tdb-foreign '* "tdb_get_logging_private"
                tdb_context*))
 
 (define tdb_transaction_start

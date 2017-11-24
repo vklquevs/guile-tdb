@@ -4,45 +4,60 @@
 (export
   tdb-open
   tdb-context?
+  tdb-exists?
+  tdb-fetch
   tdb-first-key
   tdb-next-key
-  tdb-fetch
+  tdb-set!
+  tdb-delete!
+  with-tdb-transaction
+  tdb-cancel-transaction!
   tdb-calculate-hash
+  tdb-name
+  tdb-last-error
+  tdb-assert!
   tdb-close)
 
 (use-modules
-  (srfi srfi-9)
-  (srfi srfi-9 gnu)
+  (ice-9 receive)
+  (system foreign)
+  (rnrs bytevectors)
   (tdb api))
 
-(define-record-type
-  <tdb-context> (make-tdb-context raw)
+(define free
+  (pointer->procedure void (dynamic-func "free" (dynamic-link)) '(*)))
+
+(define-wrapped-pointer-type
+  tdb_context*
   tdb-context?
-  (raw tdb-context-raw))
+  make-tdb-context
+  tdb-context-raw
+  (lambda (tdb p)
+    (format p "<tdb-context ~x>" (pointer-address (tdb-context-raw tdb)))))
 
-(define (error/int ctx r)
-  (if (eq? r 0) #t (error (tdb_errorstr ctx))))
+(define (tdb-last-error ctx)
+  (pointer->string (tdb_errorstr (tdb-context-raw ctx))))
 
-(define (assert-not-null! r)
+(define (tdb-assert! ctx val)
+  (if val (values) (error (tdb-last-error ctx))))
+
+(define (ok-0 v) (eq? 0 v))
+
+(define (null/errno r errno)
   (if (null-pointer? r)
-    (error "Null!")
+    (error (strerror errno))
     r))
+(define (int/errno r errno)
+  (if (eq? 0 r) (values) (error (strerror errno))))
 
-(define (error/null ctx r)
-  (if (null-pointer? r)
-    (error (tdb_errorstr ctx))
-    r))
-
-(define*
-  (TDB_DATA->bytevector d #:key [error? #f] [free? #f])
+(define (TDB_DATA->bytevector ctx d)
   (let* ([s (parse-c-struct d TDB_DATA)]
          [ptr (car s)]
          [len (cadr s)])
     (if (null-pointer? ptr)
-      (if error? (error (tdb_errorstr ctx)) #f)
+      #f
       (let ([bv (pointer->bytevector ptr len)])
-        (when free?
-          (free ptr))
+        (free ptr)
         bv))))
 
 (define (bytevector->TDB_DATA b)
@@ -61,45 +76,85 @@
             [seqnum #f]
             [volatile #f]
             [nesting '()]
+            ; [logger #f]
             [create #f]
-            [mode 0644])
+            [readonly #f]
+            [mode #o644])
   (make-tdb-context
-    (assert-not-null!
-      (tdb_open
-        (if path (string->pointer path) "/TDB_INTERNAL")
-        hash-size
-        (logior
-          (if clear-if-first TDB_CLEAR_IF_FIRST 0)
-          (if path 0 TDB_INTERNAL)
-          (if lock 0 TDB_NOLOCK)
-          (if mmap 0 TDB_NOMMAP)
-          (if sync 0 TDB_NOSYNC)
-          (if seqnum TDB_SEQNUM 0)
-          (if volatile TDB_VOLATILE 0)
-          (cond
-            [(eq? nesting #t) TDB_ALLOW_NESTING]
-            [(eq? nesting #f) TDB_DISALLOW_NESTING]
-            [#t 0]))
-        (if create O_CREAT 0)
-        mode))))
+    (call-with-values
+      (lambda ()
+        (tdb_open_ex
+          (if path (string->pointer path) %null-pointer)
+          hash-size
+          (logior
+            (if clear-if-first TDB_CLEAR_IF_FIRST 0)
+            (if path 0 TDB_INTERNAL)
+            (if lock 0 TDB_NOLOCK)
+            (if mmap 0 TDB_NOMMAP)
+            (if sync 0 TDB_NOSYNC)
+            (if seqnum TDB_SEQNUM 0)
+            (if volatile TDB_VOLATILE 0)
+            (cond
+              [(eq? nesting #t) TDB_ALLOW_NESTING]
+              [(eq? nesting #f) TDB_DISALLOW_NESTING]
+              [#t 0]))
+          (logior
+            (if create O_CREAT 0)
+            (if readonly O_RDONLY O_RDWR))
+          mode
+          ; Segfaults
+          ; (if logger
+          ;   (procedure->pointer
+          ;     void
+          ;     (lambda (tdbctx lvl fmt)
+          ;       (logger lvl (pointer->string fmt)))
+          ;     (list '* int))
+          ;   %null-pointer)
+          %null-pointer
+          %null-pointer))
+      null/errno)))
 
 (define (tdb-close ctx)
-  (error/int ctx (tdb_close (tdb-context-raw ctx))))
+  (call-with-values
+    (lambda () (tdb_close (tdb-context-raw ctx)))
+    int/errno))
+
+(define (tdb-name ctx)
+  (pointer->string (tdb_name (tdb-context-raw ctx))))
 
 (define (tdb-calculate-hash d)
   (tdb_jenkins_hash (bytevector->TDB_DATA d)))
 
+(define (tdb-exists? ctx key)
+  (eq? 1 (tdb_exists (tdb-context-raw ctx) (bytevector->TDB_DATA key))))
+
 (define (tdb-fetch ctx key)
-  (TDB_DATA->bytevector (tdb_fetch (tdb-context-raw ctx)
-                                   (bytevector->TDB_DATA key))
-                        #:error? #t #:free? #t))
+  (TDB_DATA->bytevector ctx
+                        (tdb_fetch (tdb-context-raw ctx)
+                                   (bytevector->TDB_DATA key))))
 
 (define (tdb-first-key ctx)
-  (TDB_DATA->bytevector (tdb_firstkey (tdb-context-raw ctx))
-                        #:error? #t #:free? #t))
+  (TDB_DATA->bytevector ctx
+                        (tdb_firstkey (tdb-context-raw ctx))))
 
 (define (tdb-next-key ctx key)
-  (TDB_DATA->bytevector (tdb_nextkey (tdb-context-raw ctx)
-                                     (bytevector->TDB_DATA key))
-                        #:error? #f #:free? #t))
+  (TDB_DATA->bytevector ctx
+                        (tdb_nextkey (tdb-context-raw ctx)
+                                     (bytevector->TDB_DATA key))))
+
+(define*
+  (tdb-set! ctx key val
+            #:key
+            [create '()])
+  (ok-0 (tdb_store (tdb-context-raw ctx)
+                   (bytevector->TDB_DATA key)
+                   (bytevector->TDB_DATA val)
+                   (cond
+                     [(eq? create #t) TDB_INSERT]
+                     [(eq? create #f) TDB_MODIFY]
+                     [#t 0]))))
+
+(define (tdb-delete! ctx key)
+  (ok-0 (tdb_delete (tdb-context-raw ctx)
+                    (bytevector->TDB_DATA key))))
 
