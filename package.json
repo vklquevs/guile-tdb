@@ -1,0 +1,11 @@
+{
+  "name": "guile-tdb",
+  "author": "vklquevs",
+  "version": "0.1.0",
+  "language": "guile",
+  "license": "lgplv3",
+  "bugs": {
+    "url": "https://gitlab.com/vklquevs/guile-tdb"
+  },
+  "gxVersion": "0.7.0"
+}

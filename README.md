@@ -13,6 +13,8 @@ You will probably not need to use this.
 
 The `(tdb)` module provides usable wrapper functionality.
 
+## [Documentation](tdb.md)
+
 ## License
 
 LGPLv3

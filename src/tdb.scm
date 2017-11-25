@@ -4,6 +4,8 @@
 (export
   tdb-open
   tdb-context?
+  tdb-context-readonly?
+  tdb-context-internal?
   tdb-exists?
   tdb-fetch tdb-ref
   tdb-first-key
@@ -155,13 +157,15 @@
             #:key
             [create '()])
   (assert-writable! ctx 'tdb-set!)
-  (ok-0 (tdb_store (tdb-context-raw ctx)
-                   (bytevector->TDB_DATA key)
-                   (bytevector->TDB_DATA val)
-                   (cond
-                     [(eq? create #t) TDB_INSERT]
-                     [(eq? create #f) TDB_MODIFY]
-                     [#t 0]))))
+  (if val
+    (ok-0 (tdb_store (tdb-context-raw ctx)
+                     (bytevector->TDB_DATA key)
+                     (bytevector->TDB_DATA val)
+                     (cond
+                       [(eq? create #t) TDB_INSERT]
+                       [(eq? create #f) TDB_MODIFY]
+                       [#t 0])))
+    (tdb-delete! ctx key)))
 
 (define (tdb-delete! ctx key)
   (assert-writable! ctx 'tdb-delete!)
@@ -182,27 +186,29 @@
     (lambda ()
       (call/cc
         (lambda (done)
-          (let ([cr
-                  (call/cc
-                    (lambda (cancel)
-                      (let ([r (func cancel)])
-                        (assert! (tdb_transaction_prepare_commit
-                                   (tdb-context-raw ctx)))
-                        (assert! (tdb_transaction_commit
-                                   (tdb-context-raw ctx)))
-                        (done r))))])
+          (receive
+            cr (call/cc
+                 (lambda (cancel)
+                   (receive
+                     r (func cancel)
+                     (assert! (tdb_transaction_prepare_commit
+                                (tdb-context-raw ctx)))
+                     (assert! (tdb_transaction_commit
+                                (tdb-context-raw ctx)))
+                     (apply done r))))
             (cancel!)
-            cr))))
+            (apply values cr)))))
     (lambda exn (cancel!))))
 
-(define (tdb-compare-and-set! ctx key old new)
+(define (tdb-compare-and-set! ctx key current val)
   (define (setter cancel)
-    (let ([current (tdb-fetch ctx key)])
-      (if (bytevector=? old current)
-        (begin (tdb-set! ctx key new) #t)
-        (cancel current))))
+    (let ([cval (tdb-fetch ctx key)])
+      (if (bytevector=? current cval)
+        (begin (tdb-set! ctx key val) #t)
+        (cancel cval))))
   (assert-writable! ctx 'tdb-compare-and-set!)
-  (if (tdb-context-internal? ctx)
-    (call/cc setter)
-    (with-tdb-transaction ctx setter)))
+  (cond
+    [(eq? current #f) (tdb-set! ctx key val #:create #t)]
+    [(tdb-context-internal? ctx) (call/cc setter)]
+    [#t (with-tdb-transaction ctx setter)]))
 
