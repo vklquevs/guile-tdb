@@ -88,8 +88,8 @@
 (define TDB_DISALLOW_NESTING 1024)
 (define TDB_INCOMPATIBLE_HASH 2048)
 
-; (define *lib* (dynamic-link "libtdb"))
-(define *lib* (dynamic-link "/nix/store/25z6z3jbf40b8rdm5n8hnzmhinbksh60-tdb-1.3.11/lib/libtdb.so"))
+(define *lib* (dynamic-link "libtdb"))
+
 (define (tdb-foreign ret name . args)
   (pointer->procedure ret (dynamic-func name *lib*) args))
 (define (tdb-foreign/errno ret name . args)
